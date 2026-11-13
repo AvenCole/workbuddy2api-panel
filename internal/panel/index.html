@@ -1079,10 +1079,11 @@ input, select { border-radius: 5px; }
         <div class="restriction-toolbar">
           <span id="restrictionSummary">封禁状态尚未批量核实</span>
           <div>
-            <button class="xs" id="btnProbeAll" title="用只读余额接口逐账号核验，不发送聊天请求">全部封禁检测</button>
+            <button class="xs" id="btnProbeAll" title="逐账号发送实际聊天请求，可能消耗积分；返回 11140 即封号">全部封禁检测</button>
             <button class="xs danger" id="btnDeleteBanned" disabled title="删除前会再次核验；凭证移入隔离目录">删除已确认封号</button>
           </div>
         </div>
+          <div id="restrictionResults" class="hint" aria-live="polite" hidden></div>
         <div class="tbl-wrap">
         <table class="acc">
           <thead><tr>

@@ -13,11 +13,11 @@ func TestRecordRestrictionProbePersistsAndDisablesConfirmedBan(t *testing.T) {
 	state := filepath.Join(t.TempDir(), "state.json")
 	p := New(state)
 	p.Add(&auth.Auth{UID: "u1"})
-	if !p.RecordRestrictionProbe("u1", "still_banned", "bulk_probe") {
+	if !p.RecordRestrictionProbe("u1", "still_banned", "chat_probe") {
 		t.Fatal("probe result was not recorded")
 	}
 	st, ok := p.Status("u1")
-	if !ok || !st.Disabled || st.RestrictionStatus != "still_banned" || st.RestrictionSource != "bulk_probe" || st.RestrictionCheckedAt == nil {
+	if !ok || !st.Disabled || st.RestrictionStatus != "still_banned" || st.RestrictionSource != "chat_probe" || st.RestrictionCheckedAt == nil {
 		t.Fatalf("confirmed restriction status = %+v, exists=%v", st, ok)
 	}
 	if p.Revive("u1") {
@@ -45,8 +45,22 @@ func TestRecordRestrictionProbePersistsAndDisablesConfirmedBan(t *testing.T) {
 	if !ok || st.RestrictionStatus != "still_banned" || !st.Disabled {
 		t.Fatalf("restored status = %+v, exists=%v", st, ok)
 	}
-	if !restored.RecordRestrictionProbe("u1", "lifted", "bulk_probe") || !restored.Revive("u1") {
+	if !restored.RecordRestrictionProbe("u1", "lifted", "chat_probe") || !restored.Revive("u1") {
 		t.Fatal("lifted account could not be manually revived")
+	}
+}
+
+func TestLegacyNonChatRestrictionVerdictIsClearedOnLoad(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "state.json")
+	if err := os.WriteFile(state, []byte(`{"accounts":{"u1":{"restriction_status":"lifted","restriction_checked_at":"2026-11-13T00:00:00Z","restriction_source":"bulk_probe"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := New(state)
+	defer p.Close()
+	p.Add(&auth.Auth{UID: "u1"})
+	st, ok := p.Status("u1")
+	if !ok || st.RestrictionStatus != "" || st.RestrictionCheckedAt != nil || st.RestrictionSource != "" {
+		t.Fatalf("legacy balance-probe verdict was retained: %+v", st)
 	}
 }
 

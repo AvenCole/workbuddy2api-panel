@@ -194,6 +194,12 @@ func (p *Pool) applyAccountsLocked(accounts map[string]stateAccount) {
 			sessionDeadFails:         s.SessionDeadFails,
 			consecutiveFails:         s.ConsecutiveFails,
 		}
+		if s.RestrictionSource == "bulk_probe" || s.RestrictionSource == "single_probe" || s.RestrictionSource == "delete_recheck" {
+			e.restrictionStatus = ""
+			e.restrictionCheckedAt = time.Time{}
+			e.restrictionSource = ""
+			migratedState = true
+		}
 		// 亚积分余量合法性：越界/非有限值（旧数据或手改）清 0，保守回退整数口径。
 		if math.IsNaN(e.creditsRemainder) || math.IsInf(e.creditsRemainder, 0) || e.creditsRemainder < -0.5 || e.creditsRemainder >= 0.5 {
 			e.creditsRemainder = 0

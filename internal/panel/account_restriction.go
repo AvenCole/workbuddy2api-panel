@@ -1,6 +1,7 @@
 package panel
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -15,15 +16,15 @@ import (
 	"github.com/misakano7545/workbuddy2api-panel/internal/upstream"
 )
 
-const restrictionProbeConcurrency = 3
-
 type restrictionProbeResult struct {
 	UID        string `json:"uid"`
 	Nickname   string `json:"nickname,omitempty"`
 	Realm      string `json:"realm,omitempty"`
+	Model      string `json:"model,omitempty"`
 	Verdict    string `json:"verdict"`
 	Restricted bool   `json:"restricted"`
 	HTTPStatus int    `json:"http_status,omitempty"`
+	ElapsedMS  int64  `json:"elapsed_ms,omitempty"`
 	CheckedAt  string `json:"checked_at"`
 }
 
@@ -41,44 +42,74 @@ func (p *Panel) modelProbeLock(uid string) *sync.Mutex {
 	return lock
 }
 
-func (p *Panel) probeRestriction(uid, source string) restrictionProbeResult {
-	result := restrictionProbeResult{UID: uid, CheckedAt: time.Now().Format(time.RFC3339)}
+func (p *Panel) probeRestriction(r *http.Request, uid, source string) restrictionProbeResult {
+	started := time.Now()
+	result := restrictionProbeResult{UID: uid, CheckedAt: started.Format(time.RFC3339)}
+	finish := func(verdict string) restrictionProbeResult {
+		result.Verdict = verdict
+		result.Restricted = verdict == "still_banned"
+		result.ElapsedMS = time.Since(started).Milliseconds()
+		if verdict == "still_banned" || verdict == "lifted" {
+			p.cfg.Pool.RecordRestrictionProbe(uid, verdict, source)
+		}
+		return result
+	}
 	a := p.cfg.Pool.AuthByUID(uid)
 	if a == nil {
-		result.Verdict = "account_missing"
-		return result
+		return finish("account_missing")
 	}
 	result.Nickname, result.Realm = a.Nickname, a.Realm()
 	if p.cfg.Upstream == nil {
-		result.Verdict = "inconclusive"
-		return result
+		return finish("inconclusive")
 	}
-	remain, total, expiring, earliestAt, earliestRemaining, buckets, err := p.cfg.Upstream.UserResourceSnapshot(a, p.expiringSoonWindow())
-	verdict := "lifted"
-	if err == nil {
-		p.cfg.Pool.SetCreditsSnapshot(uid, pool.CreditsSnapshot{
-			Remain: remain, Total: total, Expiring: expiring, EarliestAt: earliestAt,
-			EarliestRemaining: earliestRemaining, ExpiryBuckets: poolExpiryBuckets(buckets),
-		})
-	} else {
-		verdict = "inconclusive"
+	catalog, err := p.cfg.Upstream.FetchModels(a)
+	if err != nil || len(catalog) == 0 {
+		return finish("inconclusive")
+	}
+	model := catalog[0].ID
+	if model == "" {
+		return finish("inconclusive")
+	}
+	result.Model = model
+	body, _ := json.Marshal(map[string]any{
+		"model": model, "messages": []map[string]string{{"role": "user", "content": "Reply with OK."}},
+		"stream": true, "max_tokens": 1,
+	})
+	ctx, cancel := context.WithTimeout(r.Context(), accountModelTestTimeout)
+	defer cancel()
+	rc, status, respBody, err := p.cfg.Upstream.ChatStreamContext(ctx, a, body, "", upstream.ChatMeta{AgentType: upstream.AgentTypeAuxiliary}, nil)
+	result.HTTPStatus = status
+	if err != nil {
 		var ue *upstream.Error
 		if errors.As(err, &ue) {
 			result.HTTPStatus = ue.Status
-			switch {
-			case ue.Restricted:
-				verdict = "still_banned"
-			case ue.Kind == upstream.ErrSessionDead:
-				if p.cfg.Upstream.VerifySessionByRefresh(a) == upstream.VerifyDead {
-					verdict = "session_dead"
-				}
+			if ue.ChatCode11140 || chatBanCode([]byte(ue.Msg)) {
+				return finish("still_banned")
 			}
 		}
+		return finish("inconclusive")
 	}
-	result.Verdict = verdict
-	result.Restricted = verdict == "still_banned"
-	p.cfg.Pool.RecordRestrictionProbe(uid, verdict, source)
-	return result
+	if status >= 400 {
+		if chatBanCode(respBody) {
+			return finish("still_banned")
+		}
+		return finish("inconclusive")
+	}
+	if rc == nil {
+		return finish("inconclusive")
+	}
+	defer rc.Close()
+	if chatBanCode(respBody) {
+		return finish("still_banned")
+	}
+	ok, verdict := inspectModelTestStream(rc)
+	if verdict == "still_banned" {
+		return finish(verdict)
+	}
+	if ok {
+		return finish("lifted")
+	}
+	return finish("inconclusive")
 }
 
 func (p *Panel) probeAllRestrictions(w http.ResponseWriter, r *http.Request) {
@@ -86,36 +117,51 @@ func (p *Panel) probeAllRestrictions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer p.finishBatch()
-	accounts := p.cfg.Pool.List()
-	results := make([]restrictionProbeResult, len(accounts))
-	sem := make(chan struct{}, restrictionProbeConcurrency)
-	var wg sync.WaitGroup
-	for i, account := range accounts {
-		wg.Add(1)
-		go func(i int, account pool.Status) {
-			defer wg.Done()
-			select {
-			case sem <- struct{}{}:
-			case <-r.Context().Done():
-				results[i] = restrictionProbeResult{UID: account.UID, Verdict: "inconclusive", CheckedAt: time.Now().Format(time.RFC3339)}
-				return
-			}
-			defer func() { <-sem }()
-			lock := p.modelProbeLock(account.UID)
-			if !lock.TryLock() {
-				results[i] = restrictionProbeResult{UID: account.UID, Nickname: account.Nickname, Realm: account.Realm, Verdict: "test_in_progress", CheckedAt: time.Now().Format(time.RFC3339)}
-				return
-			}
-			defer lock.Unlock()
-			results[i] = p.probeRestriction(account.UID, "bulk_probe")
-		}(i, account)
-	}
-	wg.Wait()
+	results := runRestrictionProbes(r.Context(), p.cfg.Pool.List(), func(account pool.Status) restrictionProbeResult {
+		lock := p.modelProbeLock(account.UID)
+		if !lock.TryLock() {
+			return restrictionProbeResult{UID: account.UID, Nickname: account.Nickname, Realm: account.Realm, Verdict: "test_in_progress", CheckedAt: time.Now().Format(time.RFC3339)}
+		}
+		result := p.probeRestriction(r, account.UID, "chat_probe")
+		lock.Unlock()
+		return result
+	})
 	counts := map[string]int{}
 	for _, result := range results {
 		counts[result.Verdict]++
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "results": results, "counts": counts})
+}
+
+func runRestrictionProbes(ctx context.Context, accounts []pool.Status, probe func(pool.Status) restrictionProbeResult) []restrictionProbeResult {
+	results := make([]restrictionProbeResult, 0, len(accounts))
+	for _, account := range accounts {
+		if ctx.Err() != nil {
+			break
+		}
+		result := probe(account)
+		results = append(results, result)
+		if result.Restricted {
+			break
+		}
+	}
+	return results
+}
+
+func (p *Panel) accountProbeBanChat(w http.ResponseWriter, r *http.Request) {
+	uid := r.PathValue("uid")
+	if _, ok := p.cfg.Pool.Status(uid); !ok {
+		writeErr(w, http.StatusNotFound, "account not found")
+		return
+	}
+	lock := p.modelProbeLock(uid)
+	if !lock.TryLock() {
+		writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "verdict": "test_in_progress"})
+		return
+	}
+	defer lock.Unlock()
+	result := p.probeRestriction(r, uid, "chat_probe")
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "result": result, "verdict": result.Verdict})
 }
 
 func (p *Panel) deleteRestrictedAccounts(w http.ResponseWriter, r *http.Request) {
@@ -155,7 +201,7 @@ func (p *Panel) deleteRestrictedAccounts(w http.ResponseWriter, r *http.Request)
 			skipped = append(skipped, map[string]string{"uid": uid, "reason": "test_in_progress"})
 			continue
 		}
-		probe := p.probeRestriction(uid, "delete_recheck")
+		probe := p.probeRestriction(r, uid, "delete_chat_recheck")
 		if !probe.Restricted {
 			lock.Unlock()
 			skipped = append(skipped, map[string]string{"uid": uid, "reason": probe.Verdict})

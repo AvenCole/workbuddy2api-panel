@@ -106,6 +106,8 @@ type Error struct {
 	Msg    string
 	// Restricted is true only for the structured 11140 unusual-activity ban notice.
 	Restricted bool
+	// ChatCode11140 retains the business code before chat error bodies are truncated.
+	ChatCode11140 bool
 	// RetryAfter 上游明示的等待时长（Retry-After 秒 / retry-after-ms /
 	// x-ratelimit-reset 头解析，见 ParseRetryAfter）。零值 = 上游未明示，
 	// 冷却时长回落调用方计算值。挂载点选在 Error 信封：Kind 决定「罚不罚」，
@@ -1744,7 +1746,7 @@ func (c *Client) ChatStreamContext(ctx context.Context, a *auth.Auth, body []byt
 			if kind == ErrNone {
 				return nil, resp.StatusCode, raw, nil
 			}
-			ue := &Error{Kind: kind, Status: resp.StatusCode, Msg: truncate(string(raw), 200), Restricted: IsRestricted(string(raw))}
+			ue := &Error{Kind: kind, Status: resp.StatusCode, Msg: truncate(string(raw), 200), Restricted: IsRestricted(string(raw)), ChatCode11140: hasBusinessCode(string(raw), "11140")}
 			if d, ok := ParseRetryAfter(resp.Header); ok {
 				ue.RetryAfter = d
 			} else if kind == ErrUpstreamBusy {

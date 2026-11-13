@@ -23,7 +23,7 @@ func (p *Pool) Disable(uid, reason string) {
 	}
 }
 
-// RecordRestrictionProbe stores a read-only upstream account restriction verdict.
+// RecordRestrictionProbe stores an upstream chat account restriction verdict.
 // A confirmed restriction disables the account immediately; a lifted verdict does
 // not auto-revive an account that was already disabled.
 func (p *Pool) RecordRestrictionProbe(uid, verdict, source string) bool {

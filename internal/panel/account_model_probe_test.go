@@ -18,6 +18,11 @@ func TestInspectModelTestStream(t *testing.T) {
 		{"empty done", "data: [DONE]\n\n", false, "empty_response"},
 		{"incomplete empty stream", "", false, "stream_incomplete"},
 		{"event error", "event: error\ndata: {\"message\":\"denied\"}\n\n", false, "upstream_stream_error"},
+		{"11140 code is a ban", "event: error\ndata: {\"code\":11140,\"msg\":\"request illegal\"}\n\n", false, "still_banned"},
+		{"JSON error code", `{"code":11140,"msg":"request illegal"}`, false, "still_banned"},
+		{"nested code with whitespace", "data: {\"error\":{\"data\":{\"code\":\t\"11140\"}}}\n\n", false, "still_banned"},
+		{"different numeric code", "data: {\"error\":{\"code\":111400}}\n\n", false, "upstream_stream_error"},
+		{"11140 in normal model content is not an error", "data: {\"choices\":[{\"delta\":{\"content\":\"the code 11140 means ...\"}}]}\n\ndata: [DONE]\n\n", true, "success"},
 		{"oversized", strings.Repeat("x", (64<<10)+1), false, "response_too_large"},
 	}
 	for _, tt := range tests {

@@ -134,7 +134,7 @@ func (p *Panel) accountModelTest(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var ue *upstream.Error
 		if errors.As(err, &ue) {
-			if ue.Restricted {
+			if ue.ChatCode11140 || chatBanCode([]byte(ue.Msg)) {
 				result["verdict"] = "still_banned"
 				p.cfg.Pool.RecordRestrictionProbe(uid, "still_banned", "model_test")
 			} else {
@@ -148,7 +148,7 @@ func (p *Panel) accountModelTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if rc == nil || status < 200 || status >= 300 {
-		if upstream.IsRestricted(string(respBody)) {
+		if chatBanCode(respBody) {
 			result["verdict"] = "still_banned"
 			p.cfg.Pool.RecordRestrictionProbe(uid, "still_banned", "model_test")
 		} else {
@@ -164,6 +164,8 @@ func (p *Panel) accountModelTest(w http.ResponseWriter, r *http.Request) {
 	result["verdict"] = verdict
 	if verdict == "still_banned" {
 		p.cfg.Pool.RecordRestrictionProbe(uid, "still_banned", "model_test")
+	} else if ok {
+		p.cfg.Pool.RecordRestrictionProbe(uid, "lifted", "model_test")
 	}
 	result["elapsed_ms"] = time.Since(started).Milliseconds()
 	respond(http.StatusOK)
@@ -178,24 +180,33 @@ func inspectModelTestStream(rc io.Reader) (bool, string) {
 	if len(raw) > maxBytes {
 		return false, "response_too_large"
 	}
-	if upstream.IsRestricted(string(raw)) {
+	if chatBanCode(raw) {
 		return false, "still_banned"
 	}
 	scanner := bufio.NewScanner(strings.NewReader(string(raw)))
 	scanner.Buffer(make([]byte, 1024), maxBytes)
 	content, done := false, false
+	errorEvent := false
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-		if strings.HasPrefix(line, "event:") && strings.TrimSpace(strings.TrimPrefix(line, "event:")) == "error" {
-			return false, "upstream_stream_error"
+		if strings.HasPrefix(line, "event:") {
+			errorEvent = strings.TrimSpace(strings.TrimPrefix(line, "event:")) == "error"
+			continue
 		}
 		data, ok := strings.CutPrefix(line, "data:")
 		if !ok {
 			continue
 		}
 		data = strings.TrimSpace(data)
+		if errorEvent && chatBanCode([]byte(data)) {
+			return false, "still_banned"
+		}
+		if errorEvent {
+			return false, "upstream_stream_error"
+		}
 		if data == "[DONE]" {
 			done = true
+			errorEvent = false
 			continue
 		}
 		var frame struct {
@@ -210,11 +221,19 @@ func inspectModelTestStream(rc io.Reader) (bool, string) {
 			} `json:"choices"`
 		}
 		if json.Unmarshal([]byte(data), &frame) != nil {
+			errorEvent = false
 			continue
 		}
 		if len(frame.Error) > 0 && string(frame.Error) != "null" {
+			if chatBanCode(frame.Error) {
+				return false, "still_banned"
+			}
 			return false, "upstream_stream_error"
 		}
+		if len(frame.Choices) == 0 && chatBanCode([]byte(data)) {
+			return false, "still_banned"
+		}
+		errorEvent = false
 		for _, choice := range frame.Choices {
 			if strings.TrimSpace(choice.Delta.Content) != "" ||
 				strings.TrimSpace(choice.Delta.Reasoning) != "" ||
@@ -234,4 +253,22 @@ func inspectModelTestStream(rc io.Reader) (bool, string) {
 		return false, "empty_response"
 	}
 	return true, "success"
+}
+
+// chatBanCode reads error envelope codes, never model-generated content.
+func chatBanCode(raw []byte) bool {
+	var envelope map[string]json.RawMessage
+	if json.Unmarshal(raw, &envelope) != nil || len(envelope["choices"]) > 0 {
+		return false
+	}
+	code := strings.TrimSpace(string(envelope["code"]))
+	if code == "11140" || code == `"11140"` {
+		return true
+	}
+	for _, key := range []string{"error", "data", "extError"} {
+		if chatBanCode(envelope[key]) {
+			return true
+		}
+	}
+	return false
 }

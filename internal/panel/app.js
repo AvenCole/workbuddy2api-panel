@@ -525,9 +525,9 @@ function renderAccounts(list) {
   const lifted = lastAccountsList.filter(s => s.restriction_status === 'lifted').length;
   if ($('restrictionSummary')) {
     $('restrictionSummary').textContent = banned.length
-      ? '已确认封号 ' + banned.length + ' 个 · 另有 ' + lifted + ' 个探测已解封'
+      ? '已确认封号 ' + banned.length + ' 个 · 请求成功 ' + lifted + ' 个'
       : (lastAccountsList.some(s => s.restriction_checked_at)
-        ? '本轮没有确认封号 · 已解封 ' + lifted + ' 个'
+        ? '已记录请求成功 ' + lifted + ' 个；其余账号仍需请求检测'
         : '封禁状态尚未批量核实');
   }
   if (document.activeElement?.matches?.('[data-proxy-uid]')) return;
@@ -588,10 +588,10 @@ function renderAccounts(list) {
     let cls = '', tag;
     if (s.restriction_status === 'still_banned') {
       cls = 'off';
-      tag = '<span class="tag bad" title="上游只读检测确认账号存在 11140 风控限制">上游确认封号</span>';
+      tag = '<span class="tag bad" title="实际聊天请求返回业务码 11140">上游确认封号</span>';
     }
     else if (s.restriction_status === 'lifted' && s.disabled) {
-      cls = 'off'; tag = '<span class="tag ok" title="最近的只读检测已通过；账号仍禁用，需手动恢复选号">已解封 · 待恢复</span>';
+      cls = 'off'; tag = '<span class="tag ok" title="最近的聊天请求已成功；账号仍禁用，需手动恢复选号">请求成功 · 待恢复</span>';
     }
     else if (s.disabled) { cls = 'off'; tag = '<span class="tag bad">已禁用</span>'; }
     // 暂停选号：与禁用同属「不可选」，但照常保号（吸收上游 fd835df）
@@ -990,11 +990,11 @@ $('accBody').addEventListener('click', async ev => {
       const r = await api('accounts/' + encodeURIComponent(u) + '/balance', { method: 'POST' });
       toast('余额已更新：' + r.credits + (r.credits_total > 0 ? ' / ' + r.credits_total : ''), 'ok');
     } else if (a === 'probe_ban') {
-      // 只读上游探测会更新封禁结论；解封后仍需手动恢复选号。
+      if (!confirm('将使用此账号发送实际聊天测试请求，可能消耗积分；返回 11140 即标记封号。继续？')) return;
       const r = await api('accounts/' + encodeURIComponent(u) + '/probe_ban', { method: 'POST' });
       const map = {
-        lifted: ['已解封，可以点「解冻」恢复使用', 'ok'],
-        still_banned: ['仍被封禁，继续等待（勿反复 revive，可能加重风控）', 'warn'],
+        lifted: ['聊天请求成功；已禁用的账号可点「解冻」恢复使用', 'ok'],
+        still_banned: ['聊天请求返回 11140，已标记封号并禁用', 'warn'],
         blocked: ['会话仍有效，但被上游风控拦截（可能仍是封禁）—— 继续观察', 'warn'],
         session_dead: ['不是封禁问题 —— 登录态失效，需重新登录', 'warn'],
         inconclusive: ['探测无明确结论（网络/限流等），稍后再试', 'warn'],
@@ -1117,18 +1117,31 @@ $('btnCheckinAll').onclick = async () => {
   catch (e) { toast(e.message, 'err'); }
 };
 $('btnProbeAll').onclick = async () => {
+  if (!confirm('将按账号逐个发送实际聊天测试请求，可能消耗积分；一旦返回 11140 就停止后续账号。继续？')) return;
   const btn = $('btnProbeAll');
   btn.disabled = true;
   btn.textContent = '检测中…';
-  $('restrictionSummary').textContent = '正在逐账号读取上游限制状态…';
+  $('restrictionSummary').textContent = '正在逐号发送测试请求；遇到 11140 即停止…';
   try {
     const r = await api('accounts/probe_all', { method: 'POST' });
     const c = r.counts || {};
-    toast('检测完成：确认封号 ' + (c.still_banned || 0) + '，已解封 ' + (c.lifted || 0) +
-      '，登录失效 ' + (c.session_dead || 0) + '，待确认 ' + (c.inconclusive || 0), 'ok');
+    const output = $('restrictionResults');
+    if (output) {
+      const labels = { still_banned: '封号（11140）', lifted: '请求成功', inconclusive: '无法确认',
+        test_in_progress: '已有测试进行中', account_missing: '账号不存在' };
+      output.hidden = false;
+      output.innerHTML = (c.still_banned ? '<p>发现 11140，后续账号未测试。</p>' : '') +
+        (r.results || []).map(item => '<div>' + esc((item.nickname || '未命名') + ' · ' + item.uid.slice(-8)) +
+          '：' + esc(labels[item.verdict] || item.verdict) +
+          (item.model ? ' · ' + esc(item.model) : '') +
+          (item.http_status ? ' · HTTP ' + Number(item.http_status) : '') +
+          ' · ' + Number(item.elapsed_ms || 0) + ' ms</div>').join('');
+    }
+    toast('请求检测完成：确认封号 ' + (c.still_banned || 0) + '，请求成功 ' + (c.lifted || 0) +
+      '，无法确认 ' + (c.inconclusive || 0) + (c.still_banned ? '；已停止后续测试' : ''), 'ok');
     await loadOverview(true);
   } catch (e) {
-    toast('封禁检测失败：' + e.message, 'err');
+    toast('请求检测失败：' + e.message, 'err');
   } finally {
     btn.disabled = false;
     btn.textContent = '全部封禁检测';
@@ -1138,7 +1151,7 @@ $('btnDeleteBanned').onclick = async () => {
   const banned = lastAccountsList.filter(s => s.restriction_status === 'still_banned');
   if (!banned.length) return;
   const names = banned.map(s => (s.nickname || s.uid.slice(-8)) + ' · ' + s.uid.slice(-8)).join('\n');
-  if (!confirm('将再次逐个核验，并把仍确认封号的凭证（含备份）移入隔离目录。\n\n' + names + '\n\n继续？')) return;
+  if (!confirm('将对以下账号发送实际测试请求，可能消耗积分；仅返回 11140 的账号会被隔离，其他结果会跳过。\n\n' + names + '\n\n继续？')) return;
   const btn = $('btnDeleteBanned');
   btn.disabled = true;
   btn.textContent = '复核并隔离中…';
