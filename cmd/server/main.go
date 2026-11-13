@@ -457,6 +457,7 @@ func main() {
 		// 后台任务的自动触发开关与成长任务排程共用热配置（schedule.growth_enabled）。
 		AutoTasksEnabled: sch.GrowthEnabled,
 		AuthDir:          cfg.AuthDir,
+		QuarantineDir:    stateSibling(cfg.StateFile, "quarantine"),
 		APIKey:           cfg.APIKey,
 		RedisMode:        redisMode,
 		StickyCount:      sessCount,

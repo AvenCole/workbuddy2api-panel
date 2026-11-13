@@ -5,7 +5,44 @@
 //   - 只按文案判：正文里讨论「已被限制」的普通请求会被误判。
 package upstream
 
-import "testing"
+import (
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/misakano7545/workbuddy2api-panel/internal/auth"
+)
+
+func TestUserResourceErrorCarriesExplicitRestrictionFlag(t *testing.T) {
+	cases := []struct {
+		name       string
+		body       string
+		restricted bool
+	}{
+		{"ban notice", `{"code":11140,"msg":"request illegal","displayMsg":{"zh":"账号存在异常行为，已被限制使用"}}`, true},
+		{"trial not activated", `{"code":14017,"msg":"trial not activated"}`, false},
+		{"model provider rate limit", `{"code":11140,"msg":"The model provider is rate-limiting requests."}`, false},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer srv.Close()
+			c := &Client{HTTP: srv.Client(), BillingBaseCN: srv.URL}
+			_, _, err := c.UserResource(&auth.Auth{UID: "u1", AccessToken: "at"})
+			var ue *Error
+			if !errors.As(err, &ue) {
+				t.Fatalf("UserResource error = %v, want upstream.Error", err)
+			}
+			if ue.Restricted != tt.restricted {
+				t.Fatalf("Restricted = %v, want %v (msg=%q)", ue.Restricted, tt.restricted, ue.Msg)
+			}
+		})
+	}
+}
 
 func TestIsRestricted(t *testing.T) {
 	cases := []struct {

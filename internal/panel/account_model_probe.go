@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/misakano7545/workbuddy2api-panel/internal/pool"
@@ -50,16 +49,7 @@ func (p *Panel) accountModelTest(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "account not found")
 		return
 	}
-	p.modelProbeMu.Lock()
-	if p.modelProbeLocks == nil {
-		p.modelProbeLocks = map[string]*sync.Mutex{}
-	}
-	lock := p.modelProbeLocks[uid]
-	if lock == nil {
-		lock = &sync.Mutex{}
-		p.modelProbeLocks[uid] = lock
-	}
-	p.modelProbeMu.Unlock()
+	lock := p.modelProbeLock(uid)
 	if !lock.TryLock() {
 		writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "verdict": "test_in_progress"})
 		return
@@ -124,7 +114,7 @@ func (p *Panel) accountModelTest(w http.ResponseWriter, r *http.Request) {
 		"stream":     true,
 		"max_tokens": 8,
 	})
-	rc, status, _, err := p.cfg.Upstream.ChatStreamContext(ctx, a, body, "", upstream.ChatMeta{AgentType: upstream.AgentTypeAuxiliary}, nil)
+	rc, status, respBody, err := p.cfg.Upstream.ChatStreamContext(ctx, a, body, "", upstream.ChatMeta{AgentType: upstream.AgentTypeAuxiliary}, nil)
 	result := map[string]any{
 		"ok": false, "uid": uid, "model": model, "realm": a.Realm(),
 		"tested_at": time.Now().Format(time.RFC3339), "elapsed_ms": time.Since(started).Milliseconds(),
@@ -144,7 +134,12 @@ func (p *Panel) accountModelTest(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var ue *upstream.Error
 		if errors.As(err, &ue) {
-			result["verdict"] = ue.Kind.String()
+			if ue.Restricted {
+				result["verdict"] = "still_banned"
+				p.cfg.Pool.RecordRestrictionProbe(uid, "still_banned", "model_test")
+			} else {
+				result["verdict"] = ue.Kind.String()
+			}
 			result["http_status"] = ue.Status
 		} else {
 			result["verdict"] = "transport_error"
@@ -153,7 +148,12 @@ func (p *Panel) accountModelTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if rc == nil || status < 200 || status >= 300 {
-		result["verdict"] = "empty_response"
+		if upstream.IsRestricted(string(respBody)) {
+			result["verdict"] = "still_banned"
+			p.cfg.Pool.RecordRestrictionProbe(uid, "still_banned", "model_test")
+		} else {
+			result["verdict"] = "empty_response"
+		}
 		result["http_status"] = status
 		respond(http.StatusOK)
 		return
@@ -162,6 +162,9 @@ func (p *Panel) accountModelTest(w http.ResponseWriter, r *http.Request) {
 	ok, verdict := inspectModelTestStream(rc)
 	result["ok"] = ok
 	result["verdict"] = verdict
+	if verdict == "still_banned" {
+		p.cfg.Pool.RecordRestrictionProbe(uid, "still_banned", "model_test")
+	}
 	result["elapsed_ms"] = time.Since(started).Milliseconds()
 	respond(http.StatusOK)
 }
@@ -174,6 +177,9 @@ func inspectModelTestStream(rc io.Reader) (bool, string) {
 	}
 	if len(raw) > maxBytes {
 		return false, "response_too_large"
+	}
+	if upstream.IsRestricted(string(raw)) {
+		return false, "still_banned"
 	}
 	scanner := bufio.NewScanner(strings.NewReader(string(raw)))
 	scanner.Buffer(make([]byte, 1024), maxBytes)

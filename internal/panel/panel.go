@@ -47,6 +47,7 @@ type Config struct {
 	// AutoTasksEnabled 与成长任务开关共用热配置；nil 时只允许手动启动后台任务。
 	AutoTasksEnabled func() bool
 	AuthDir          string // OAuth 登录完成后凭证落盘目录
+	QuarantineDir    string // 封禁账号凭证隔离目录（应位于持久化卷）
 	APIKey           string // 空 = 不鉴权（与主服务同语义）；与 Live 同时给出时 Live 优先
 	RedisMode        string // "upstash" / "noop"，仅观测透出
 	Version          string // 面板版本号（展示用）
@@ -274,6 +275,8 @@ func (p *Panel) routes() {
 	// 手动测试指定账号 × 模型，固定账号直连上游，不经过池选号。
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/model_test", p.accountModelTest)
 	p.mux.HandleFunc("GET /panel/api/accounts/{uid}/models", p.accountModels)
+	p.mux.HandleFunc("POST /panel/api/accounts/probe_all", p.probeAllRestrictions)
+	p.mux.HandleFunc("POST /panel/api/accounts/delete_banned", p.deleteRestrictedAccounts)
 	// 封禁账号探活：只读探测上游是否已解封，不 revive、不参与选号。
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/probe_ban", p.accountProbeBan)
 	p.mux.HandleFunc("POST /panel/api/login/start", p.loginStart)
@@ -1084,7 +1087,12 @@ func (p *Panel) accountRevive(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "account not found")
 		return
 	}
-	p.cfg.Pool.Revive(uid)
+	if !p.cfg.Pool.Revive(uid) {
+		if st, exists := p.cfg.Pool.Status(uid); exists && st.RestrictionStatus == "still_banned" {
+			writeErr(w, http.StatusConflict, "upstream still confirms this account is restricted; run a probe after the restriction is lifted")
+			return
+		}
+	}
 	log.Printf("panel: revive uid=%s（人工清除禁用/冷却/熔断）", uid)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
@@ -1804,6 +1812,7 @@ func (p *Panel) accountProbeBan(w http.ResponseWriter, r *http.Request) {
 		switch p.cfg.Upstream.VerifySessionByRefresh(a) {
 		case upstream.VerifyAlive:
 			resp["verdict"] = "blocked"
+			p.cfg.Pool.RecordRestrictionProbe(uid, "inconclusive", "single_probe")
 			resp["detail"] = err.Error()
 			resp["advice"] = "会话仍有效，但请求被上游风控拦截（可能仍是 11140 封禁）—— 继续观察，勿反复 revive"
 			log.Printf("panel: probe_ban uid=%s → 被拦截但会话有效（refresh ok）", uid)
@@ -1811,6 +1820,7 @@ func (p *Panel) accountProbeBan(w http.ResponseWriter, r *http.Request) {
 			return
 		case upstream.VerifyInconclusive:
 			resp["verdict"] = "inconclusive"
+			p.cfg.Pool.RecordRestrictionProbe(uid, "inconclusive", "single_probe")
 			resp["detail"] = err.Error()
 			resp["advice"] = "refresh 未给出明确判词（网络/限流等），稍后再试"
 			log.Printf("panel: probe_ban uid=%s → 无明确结论", uid)
@@ -1822,20 +1832,24 @@ func (p *Panel) accountProbeBan(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case err == nil:
 		resp["verdict"] = "lifted"
+		p.cfg.Pool.RecordRestrictionProbe(uid, "lifted", "single_probe")
 		resp["advice"] = "上游已解封，可以点「解冻」恢复使用"
 		log.Printf("panel: probe_ban uid=%s → 已解封", uid)
-	case isAccountFaultErr(err):
+	case isRestrictedErr(err):
 		resp["verdict"] = "still_banned"
+		p.cfg.Pool.RecordRestrictionProbe(uid, "still_banned", "single_probe")
 		resp["detail"] = err.Error()
 		resp["advice"] = "仍被封禁，继续等待；勿反复 revive（可能加重风控）"
 		log.Printf("panel: probe_ban uid=%s → 仍被封", uid)
 	case isSessionDeadErr(err):
 		resp["verdict"] = "session_dead"
+		p.cfg.Pool.RecordRestrictionProbe(uid, "session_dead", "single_probe")
 		resp["detail"] = err.Error()
 		resp["advice"] = "不是封禁问题，是登录态失效 —— 需重新登录"
 		log.Printf("panel: probe_ban uid=%s → 登录失效（非封禁）", uid)
 	default:
 		resp["verdict"] = "inconclusive"
+		p.cfg.Pool.RecordRestrictionProbe(uid, "inconclusive", "single_probe")
 		resp["detail"] = err.Error()
 		resp["advice"] = "无明确结论（网络/限流等），稍后再试"
 		log.Printf("panel: probe_ban uid=%s → 无结论: %v", uid, err)
@@ -1843,13 +1857,9 @@ func (p *Panel) accountProbeBan(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// isAccountFaultErr 判断错误是否为账号级封禁/风控（11140 request illegal 等）。
-func isAccountFaultErr(err error) bool {
+func isRestrictedErr(err error) bool {
 	var ue *upstream.Error
-	if !errors.As(err, &ue) {
-		return false
-	}
-	return ue.Kind == upstream.ErrAccountFault
+	return errors.As(err, &ue) && ue.Restricted
 }
 
 // isSessionDeadErr 判断错误是否为登录态失效。

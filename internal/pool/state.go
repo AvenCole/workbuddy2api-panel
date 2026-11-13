@@ -23,6 +23,34 @@ func (p *Pool) Disable(uid, reason string) {
 	}
 }
 
+// RecordRestrictionProbe stores a read-only upstream account restriction verdict.
+// A confirmed restriction disables the account immediately; a lifted verdict does
+// not auto-revive an account that was already disabled.
+func (p *Pool) RecordRestrictionProbe(uid, verdict, source string) bool {
+	if verdict != "still_banned" && verdict != "lifted" && verdict != "session_dead" && verdict != "inconclusive" {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	e, ok := p.byUID[uid]
+	if !ok {
+		return false
+	}
+	if e.restrictionStatus == "still_banned" && verdict != "still_banned" && verdict != "lifted" {
+		return true
+	}
+	e.restrictionStatus = verdict
+	e.restrictionCheckedAt = time.Now()
+	e.restrictionSource = source
+	if verdict == "still_banned" {
+		if !e.disabled {
+			p.disableLocked(e, "account restricted by upstream (11140); appeal in WorkBuddy")
+		}
+	}
+	p.dirty.Store(true)
+	return true
+}
+
 // NoteSessionDead 记录一次 ErrSessionDead（12153）——**不立即禁用**。
 // 旧行为一次 12153 即 Disable，但 12153 会被临时性触发（网络抖动/上游闪断/refresh
 // 竞态），一次失败就永久杀号会误杀健康账号（P0-1 侦察：13 个 disabled 号全部 refresh
@@ -109,6 +137,9 @@ func (p *Pool) Revive(uid string) bool {
 	defer p.mu.Unlock()
 	e, ok := p.byUID[uid]
 	if !ok {
+		return false
+	}
+	if e.restrictionStatus == "still_banned" {
 		return false
 	}
 	e.disabled = false
@@ -859,6 +890,8 @@ func (p *Pool) statusOf(uid string, e *entry) Status {
 		Nickname:                 e.a.Nickname,
 		Credits:                  e.credits,
 		CreditsTotal:             e.creditsTotal,
+		RestrictionStatus:        e.restrictionStatus,
+		RestrictionSource:        e.restrictionSource,
 		CreditsExpiring:          e.creditsExpiring,
 		CreditsEarliestExpiry:    e.creditsEarliestExpiry,
 		CreditsEarliestRemaining: e.creditsEarliestRemaining,
@@ -894,6 +927,10 @@ func (p *Pool) statusOf(uid string, e *entry) Status {
 	if !e.creditsUpdatedAt.IsZero() {
 		updated := e.creditsUpdatedAt
 		st.CreditsUpdatedAt = &updated
+	}
+	if !e.restrictionCheckedAt.IsZero() {
+		checked := e.restrictionCheckedAt
+		st.RestrictionCheckedAt = &checked
 	}
 	if st.Cooling || st.Disabled {
 		st.Reason = e.reason

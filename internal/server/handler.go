@@ -2613,19 +2613,13 @@ func (h *Handler) applyErrorPolicy(uid string, kind upstream.ErrKind, body, mode
 		//   - 14017（trial not activated）→ register 未完成，补完 register 后可能自愈，
 		//     **保持软冷却**（禁用会让用户补完 register 后仍无法用）。
 		// 大小写不敏感（与 Classify 的 marker 匹配同口径）。
-		if strings.Contains(strings.ToLower(body), "request illegal") {
-			if upstream.HasCodeMarker(body, "11-128") {
-				h.cfg.Pool.CooldownSoftRate(uid, h.softCooldown(), time.Time{},
-					"channel verification blocked (11-128 request illegal)")
-				return
-			}
-			h.cfg.Pool.Disable(uid, "account restricted by upstream (11140 request illegal); appeal in WorkBuddy (submit feedback) to lift the restriction")
-			return true
+		if upstream.HasCodeMarker(body, "11-128") && strings.Contains(strings.ToLower(body), "request illegal") {
+			h.cfg.Pool.CooldownSoftRate(uid, h.softCooldown(), time.Time{},
+				"channel verification blocked (11-128 request illegal)")
+			return
 		}
-		// 11140 的中文风控文书（"账号存在异常行为，已被限制使用" / "unusual activity"）：
-		// 与上面的英文形态同一个判据、同一处置——禁用该号 + 通知调用方停手（restrict.go）。
-		if upstream.IsRestricted(body) {
-			h.cfg.Pool.Disable(uid, "account restricted by upstream (11140 unusual activity); appeal in WorkBuddy (submit feedback) to lift the restriction")
+		if upstream.HasCodeMarker(body, "11140") || upstream.IsRestricted(body) {
+			h.cfg.Pool.RecordRestrictionProbe(uid, "still_banned", "chat")
 			return true
 		}
 		h.cfg.Pool.Cooldown(uid, pool.CoolSoft, h.softCooldown(), "account fault (14017)")

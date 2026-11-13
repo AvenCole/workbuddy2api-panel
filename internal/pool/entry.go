@@ -77,11 +77,14 @@ type ExpiryBucket struct {
 
 // Status 单个账号对外暴露的状态（脱敏）。
 type Status struct {
-	UID              string     `json:"uid"`
-	Nickname         string     `json:"nickname,omitempty"`
-	Credits          int64      `json:"credits"`
-	CreditsTotal     int64      `json:"credits_total,omitempty"`      // 积分总额度（各套餐聚合）；0 = 未知（旧 state/查询失败）
-	CreditsUpdatedAt *time.Time `json:"credits_updated_at,omitempty"` // 最近一次上游余额读取时间；本地扣费不刷新
+	UID                  string     `json:"uid"`
+	Nickname             string     `json:"nickname,omitempty"`
+	Credits              int64      `json:"credits"`
+	CreditsTotal         int64      `json:"credits_total,omitempty"`      // 积分总额度（各套餐聚合）；0 = 未知（旧 state/查询失败）
+	CreditsUpdatedAt     *time.Time `json:"credits_updated_at,omitempty"` // 最近一次上游余额读取时间；本地扣费不刷新
+	RestrictionStatus    string     `json:"restriction_status,omitempty"`
+	RestrictionCheckedAt *time.Time `json:"restriction_checked_at,omitempty"`
+	RestrictionSource    string     `json:"restriction_source,omitempty"`
 	// ReserveBlocked 是否因「保留积分」停牌（余额已知且 <= 阈值）：账号仍在池中、
 	// 照常跑定时任务，只是不接单。阈值 0 / 余额未知 → false。
 	ReserveBlocked bool `json:"reserve_blocked,omitempty"`
@@ -273,8 +276,11 @@ type entry struct {
 	reason string
 	// disabledAt 禁用时刻（零值 = 未禁用）。与 reason 配对：运维需要知道
 	// 「什么时候被禁的」——同样一句 401，是刚刚发生还是挂了一周，处置完全不同。
-	disabledAt time.Time
-	lastUsed   time.Time // 最近被选中时刻（防并发撞号）
+	disabledAt           time.Time
+	restrictionStatus    string
+	restrictionCheckedAt time.Time
+	restrictionSource    string
+	lastUsed             time.Time // 最近被选中时刻（防并发撞号）
 	// usedSeq 单调递增的选中序号：每次被 pick 选中时取 p.pickSeq 自增值。
 	// Windows 等平台 time.Now() 精度有限（~0.5ms），高并发/快速连续选号时多个
 	// 账号 lastUsed 完全相等，基于 wall-clock 的 LRU/防惊群判定失效。
@@ -551,18 +557,21 @@ func (e *entry) fallbackKind(now time.Time) string {
 
 // stateAccount 单个账号的持久化状态（JSON tag 全小写下划线，向后兼容：缺字段零值）。
 type stateAccount struct {
-	Credits          int64     `json:"credits"`
-	CreditsUpdatedAt time.Time `json:"credits_updated_at,omitempty"`
-	CreditsRemainder float64   `json:"credits_remainder,omitempty"`
-	CreditsTotal     int64     `json:"credits_total,omitempty"`
-	Disabled         bool      `json:"disabled"`
-	Paused           bool      `json:"paused,omitempty"`
-	Group            string    `json:"group,omitempty"`
-	Reason           string    `json:"reason,omitempty"`
-	DisabledAt       time.Time `json:"disabled_at,omitempty"` // 禁用时刻（持久化：重启后仍能看出禁了多久）
-	Until            time.Time `json:"until,omitempty"`
-	CoolKind         CoolKind  `json:"cool_kind"`
-	SuccessCount     int64     `json:"success_count,omitempty"`
+	Credits              int64      `json:"credits"`
+	CreditsUpdatedAt     time.Time  `json:"credits_updated_at,omitempty"`
+	RestrictionStatus    string     `json:"restriction_status,omitempty"`
+	RestrictionCheckedAt *time.Time `json:"restriction_checked_at,omitempty"`
+	RestrictionSource    string     `json:"restriction_source,omitempty"`
+	CreditsRemainder     float64    `json:"credits_remainder,omitempty"`
+	CreditsTotal         int64      `json:"credits_total,omitempty"`
+	Disabled             bool       `json:"disabled"`
+	Paused               bool       `json:"paused,omitempty"`
+	Group                string     `json:"group,omitempty"`
+	Reason               string     `json:"reason,omitempty"`
+	DisabledAt           time.Time  `json:"disabled_at,omitempty"` // 禁用时刻（持久化：重启后仍能看出禁了多久）
+	Until                time.Time  `json:"until,omitempty"`
+	CoolKind             CoolKind   `json:"cool_kind"`
+	SuccessCount         int64      `json:"success_count,omitempty"`
 	// err_total 累计错误计数。旧版 err_count（连续错误）仍可读：加载时映射到 err_total，
 	// 仅作一次性迁移，不再回写 err_count。
 	ErrTotal    int64     `json:"err_total,omitempty"`

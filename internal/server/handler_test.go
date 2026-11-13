@@ -2674,6 +2674,17 @@ func TestApplyErrorPolicyAuthForbiddenStillDisables(t *testing.T) {
 	}
 }
 
+func TestApplyErrorPolicyTrialNotActivatedDoesNotMarkBanned(t *testing.T) {
+	p := pool.New("")
+	p.Add(&auth.Auth{UID: "u1"})
+	h := NewHandler(Config{Pool: p, SoftCooldown: 600 * time.Second})
+	h.applyErrorPolicy("u1", upstream.ErrAccountFault, `{"code":14017,"msg":"request illegal: trial not activated"}`, "m", nil)
+	st, _ := p.Status("u1")
+	if st.Disabled || st.RestrictionStatus == "still_banned" {
+		t.Fatalf("14017 was incorrectly classified as an upstream restriction: %+v", st)
+	}
+}
+
 // TestChatUserIDClientGetsPerConversationCacheSlot 只发 user_id 的客户端不参与粘性
 // （ExtractKey 返回空串），但缓存槽不能退化成「每账号一个常量槽」——否则同账号上交错
 // 的多段对话互相覆盖前缀缓存，大上下文周期性命中率掉到 0.2%（issue #5）。

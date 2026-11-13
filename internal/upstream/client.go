@@ -104,6 +104,8 @@ type Error struct {
 	Kind   ErrKind
 	Status int
 	Msg    string
+	// Restricted is true only for the structured 11140 unusual-activity ban notice.
+	Restricted bool
 	// RetryAfter 上游明示的等待时长（Retry-After 秒 / retry-after-ms /
 	// x-ratelimit-reset 头解析，见 ParseRetryAfter）。零值 = 上游未明示，
 	// 冷却时长回落调用方计算值。挂载点选在 Error 信封：Kind 决定「罚不罚」，
@@ -1352,7 +1354,7 @@ func (c *Client) doJSONRaw(req *http.Request, a *auth.Auth) (apiEnvelope, []byte
 	}
 	if resp.StatusCode >= 400 {
 		kind := Classify(resp.StatusCode, string(raw))
-		return env, raw, &Error{Kind: kind, Status: resp.StatusCode, Msg: truncate(string(raw), 200)}
+		return env, raw, &Error{Kind: kind, Status: resp.StatusCode, Msg: truncate(string(raw), 200), Restricted: IsRestricted(string(raw))}
 	}
 	if err := json.Unmarshal(raw, &env); err != nil {
 		return env, raw, fmt.Errorf("parse failed: %w (body: %s)", err, truncate(string(raw), 120))
@@ -1362,7 +1364,7 @@ func (c *Client) doJSONRaw(req *http.Request, a *auth.Auth) (apiEnvelope, []byte
 		if kind == ErrNone {
 			kind = ErrClient
 		}
-		return env, raw, &Error{Kind: kind, Status: resp.StatusCode, Msg: fmt.Sprintf("code=%d msg=%s", env.Code, truncate(env.Msg, 160))}
+		return env, raw, &Error{Kind: kind, Status: resp.StatusCode, Msg: fmt.Sprintf("code=%d msg=%s", env.Code, truncate(env.Msg, 160)), Restricted: IsRestricted(string(raw))}
 	}
 	return env, raw, nil
 }
@@ -1742,7 +1744,7 @@ func (c *Client) ChatStreamContext(ctx context.Context, a *auth.Auth, body []byt
 			if kind == ErrNone {
 				return nil, resp.StatusCode, raw, nil
 			}
-			ue := &Error{Kind: kind, Status: resp.StatusCode, Msg: truncate(string(raw), 200)}
+			ue := &Error{Kind: kind, Status: resp.StatusCode, Msg: truncate(string(raw), 200), Restricted: IsRestricted(string(raw))}
 			if d, ok := ParseRetryAfter(resp.Header); ok {
 				ue.RetryAfter = d
 			} else if kind == ErrUpstreamBusy {

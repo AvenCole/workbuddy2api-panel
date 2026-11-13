@@ -516,6 +516,20 @@ function syncGroupFilter() {
 
 function renderAccounts(list) {
   lastAccountsList = Array.isArray(list) ? list : [];
+  const banned = lastAccountsList.filter(s => s.restriction_status === 'still_banned');
+  if ($('btnProbeAll')) $('btnProbeAll').disabled = !lastAccountsList.length;
+  if ($('btnDeleteBanned')) {
+    $('btnDeleteBanned').disabled = !banned.length;
+    $('btnDeleteBanned').textContent = '删除已确认封号 ' + banned.length;
+  }
+  const lifted = lastAccountsList.filter(s => s.restriction_status === 'lifted').length;
+  if ($('restrictionSummary')) {
+    $('restrictionSummary').textContent = banned.length
+      ? '已确认封号 ' + banned.length + ' 个 · 另有 ' + lifted + ' 个探测已解封'
+      : (lastAccountsList.some(s => s.restriction_checked_at)
+        ? '本轮没有确认封号 · 已解封 ' + lifted + ' 个'
+        : '封禁状态尚未批量核实');
+  }
   if (document.activeElement?.matches?.('[data-proxy-uid]')) return;
   const tb = $('accBody');
   const total = lastAccountsList.length;
@@ -572,7 +586,14 @@ function renderAccounts(list) {
     const dg = (new Date(s.degrade_until || 0) - Date.now()) / 1000;
     const cool = Math.max(s.cool_remaining_sec || 0, bl > 0 ? bl : 0, dg > 0 ? dg : 0);
     let cls = '', tag;
-    if (s.disabled) { cls = 'off'; tag = '<span class="tag bad">已禁用</span>'; }
+    if (s.restriction_status === 'still_banned') {
+      cls = 'off';
+      tag = '<span class="tag bad" title="上游只读检测确认账号存在 11140 风控限制">上游确认封号</span>';
+    }
+    else if (s.restriction_status === 'lifted' && s.disabled) {
+      cls = 'off'; tag = '<span class="tag ok" title="最近的只读检测已通过；账号仍禁用，需手动恢复选号">已解封 · 待恢复</span>';
+    }
+    else if (s.disabled) { cls = 'off'; tag = '<span class="tag bad">已禁用</span>'; }
     // 暂停选号：与禁用同属「不可选」，但照常保号（吸收上游 fd835df）
     else if (s.paused) { cls = 'off'; tag = '<span class="tag warn">已暂停选号</span>'; }
     else if (cool > 0) {
@@ -969,8 +990,7 @@ $('accBody').addEventListener('click', async ev => {
       const r = await api('accounts/' + encodeURIComponent(u) + '/balance', { method: 'POST' });
       toast('余额已更新：' + r.credits + (r.credits_total > 0 ? ' / ' + r.credits_total : ''), 'ok');
     } else if (a === 'probe_ban') {
-      // 只读探测：后端不改任何池状态，所以这里**不刷新** overview（没有变化）。
-      // 结论用 toast 说清处置动作，而不是只报一句「仍被封」——运维要知道下一步做什么。
+      // 只读上游探测会更新封禁结论；解封后仍需手动恢复选号。
       const r = await api('accounts/' + encodeURIComponent(u) + '/probe_ban', { method: 'POST' });
       const map = {
         lifted: ['已解封，可以点「解冻」恢复使用', 'ok'],
@@ -982,7 +1002,8 @@ $('accBody').addEventListener('click', async ev => {
       };
       const m = map[r.verdict] || [r.verdict + (r.detail ? '：' + r.detail : ''), 'warn'];
       toast(m[0], m[1]);
-      return; // 探测不改变状态，跳过下面的 loadOverview
+      await loadOverview(true);
+      return; // 已刷新封禁状态，跳过后续操作分支
     } else if (a === 'revive') {
       await api('accounts/' + encodeURIComponent(u) + '/revive', { method: 'POST' });
       toast('已解冻', 'ok');
@@ -1073,6 +1094,7 @@ $('btnModelTestRun').onclick = async () => {
       not_chat_model: '这是图像或视频模型，不能用文本测试', catalog_error: '该账号模型目录查询失败',
       soft_rate: '账号或模型当前被限流', hard_credit: '上游判定余额不足',
       model_blocked: '账号无此模型或无权限', session_dead: '账号登录态失效',
+      still_banned: '上游确认账号仍被封禁（11140）',
       transport_error: '连接上游失败', empty_response: '上游没有返回文本',
       upstream_stream_error: '上游返回流内错误', stream_incomplete: '响应未正常结束',
       response_too_large: '响应超过测试读取上限', test_in_progress: '该账号已有测试正在运行',
@@ -1093,6 +1115,45 @@ $('btnModelTestRun').onclick = async () => {
 $('btnCheckinAll').onclick = async () => {
   try { await api('checkin_all', { method: 'POST' }); toast('全部签到已开始，结果见日志', 'ok'); }
   catch (e) { toast(e.message, 'err'); }
+};
+$('btnProbeAll').onclick = async () => {
+  const btn = $('btnProbeAll');
+  btn.disabled = true;
+  btn.textContent = '检测中…';
+  $('restrictionSummary').textContent = '正在逐账号读取上游限制状态…';
+  try {
+    const r = await api('accounts/probe_all', { method: 'POST' });
+    const c = r.counts || {};
+    toast('检测完成：确认封号 ' + (c.still_banned || 0) + '，已解封 ' + (c.lifted || 0) +
+      '，登录失效 ' + (c.session_dead || 0) + '，待确认 ' + (c.inconclusive || 0), 'ok');
+    await loadOverview(true);
+  } catch (e) {
+    toast('封禁检测失败：' + e.message, 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '全部封禁检测';
+  }
+};
+$('btnDeleteBanned').onclick = async () => {
+  const banned = lastAccountsList.filter(s => s.restriction_status === 'still_banned');
+  if (!banned.length) return;
+  const names = banned.map(s => (s.nickname || s.uid.slice(-8)) + ' · ' + s.uid.slice(-8)).join('\n');
+  if (!confirm('将再次逐个核验，并把仍确认封号的凭证（含备份）移入隔离目录。\n\n' + names + '\n\n继续？')) return;
+  const btn = $('btnDeleteBanned');
+  btn.disabled = true;
+  btn.textContent = '复核并隔离中…';
+  try {
+    const r = await api('accounts/delete_banned', {
+      method: 'POST', body: JSON.stringify({ uids: banned.map(s => s.uid) }),
+    });
+    toast('已隔离 ' + (r.deleted || []).length + ' 个账号；跳过 ' + (r.skipped || []).length + ' 个', 'ok');
+    await loadOverview(true);
+  } catch (e) {
+    toast('隔离账号失败：' + e.message, 'err');
+  } finally {
+    btn.disabled = false;
+    renderAccounts(lastAccountsList);
+  }
 };
 $('btnKeepaliveAll').onclick = async () => {
   try { await api('keepalive_all', { method: 'POST' }); toast('全部保活已开始，结果见日志', 'ok'); }

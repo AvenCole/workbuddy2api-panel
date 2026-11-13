@@ -18,6 +18,13 @@ import (
 
 var flushInterval = 5 * time.Second
 
+func timeOrZero(value *time.Time) time.Time {
+	if value == nil {
+		return time.Time{}
+	}
+	return *value
+}
+
 // persistLogEvery 连续落盘失败每 N 次打一条提醒（flusher 5s 一把 ≈ 1 分钟一次），
 // 避免磁盘持续满/权限丢失时日志刷屏。
 const persistLogEvery = 12
@@ -162,6 +169,9 @@ func (p *Pool) applyAccountsLocked(accounts map[string]stateAccount) {
 			a:                        &auth.Auth{UID: uid}, // placeholder，Add 时会换成完整凭证
 			credits:                  s.Credits,
 			creditsUpdatedAt:         s.CreditsUpdatedAt,
+			restrictionStatus:        s.RestrictionStatus,
+			restrictionCheckedAt:     timeOrZero(s.RestrictionCheckedAt),
+			restrictionSource:        s.RestrictionSource,
 			creditsRemainder:         s.CreditsRemainder,
 			creditsTotal:             s.CreditsTotal,
 			creditsExpiring:          s.CreditsExpiring,
@@ -341,6 +351,8 @@ func (p *Pool) stateOverviewLocked() stateFile {
 		s := stateAccount{
 			Credits:                  e.credits,
 			CreditsUpdatedAt:         e.creditsUpdatedAt,
+			RestrictionStatus:        e.restrictionStatus,
+			RestrictionSource:        e.restrictionSource,
 			CreditsRemainder:         e.creditsRemainder,
 			CreditsTotal:             e.creditsTotal,
 			Disabled:                 e.disabled,
@@ -359,6 +371,10 @@ func (p *Pool) stateOverviewLocked() stateFile {
 			CreditsEarliestExpiry:    e.creditsEarliestExpiry,
 			CreditsEarliestRemaining: e.creditsEarliestRemaining,
 			CreditsExpiryBuckets:     append([]ExpiryBucket(nil), e.expiryBuckets...),
+		}
+		if !e.restrictionCheckedAt.IsZero() {
+			checked := e.restrictionCheckedAt
+			s.RestrictionCheckedAt = &checked
 		}
 		// 账号级冷却字段：仅禁用或仍在冷却时限内落盘（与熔断/降权同款惰性清洗）。
 		// 软冷却按墙钟到期、字段本身不清理，无条件落盘会让过期 reason 在 state.json 里
