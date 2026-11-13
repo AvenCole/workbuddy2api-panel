@@ -117,15 +117,85 @@ func TestRestrictionProbeUsesAccountChatAndNeverBalance(t *testing.T) {
 	}
 }
 
-func TestRunRestrictionProbesStopsOnFirst11140(t *testing.T) {
+func TestProbeAllRestrictionsRequestsEveryAccount(t *testing.T) {
+	accounts := pool.New("")
+	for _, uid := range []string{"u1", "u2", "u3", "u4"} {
+		accounts.Add(&auth.Auth{UID: uid, AccessToken: uid, ExpiresAt: 9999999999})
+	}
+	// Previously confirmed and disabled accounts must also receive a fresh request.
+	accounts.RecordRestrictionProbe("u1", "still_banned", "chat_probe")
+	calls := map[string]int{}
+	up := &upstream.Client{ChatBaseCN: "https://chat.example", BillingBaseCN: "https://billing.example"}
+	up.HTTP = &http.Client{Transport: fakeRoundTripper(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Host == "billing.example" {
+			t.Error("bulk restriction check called billing")
+		}
+		status, body := http.StatusOK, `{"code":0,"data":{"models":[{"id":"glm-5.2","name":"GLM","maxOutputTokens":8192}],"agents":[{"name":"cli","models":["glm-5.2"]}]}}`
+		if r.Method == http.MethodPost {
+			uid := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+			calls[uid]++
+			switch uid {
+			case "u1", "u4":
+				status, body = 403, `{"code":11140,"msg":"request illegal"}`
+			case "u2":
+				body = "data: {\"choices\":[{\"delta\":{\"content\":\"OK\"}}]}\n\ndata: [DONE]\n\n"
+			case "u3":
+				status, body = 429, `{"code":6004,"msg":"rate limit"}`
+			default:
+				t.Errorf("unexpected account credential: %q", uid)
+			}
+		}
+		return &http.Response{StatusCode: status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})}
+	p := &Panel{cfg: Config{Pool: accounts, Upstream: up}}
+	recorder := httptest.NewRecorder()
+	p.probeAllRestrictions(recorder, httptest.NewRequest(http.MethodPost, "/probe_all", nil))
+	var response struct {
+		Results []restrictionProbeResult `json:"results"`
+		Counts  map[string]int           `json:"counts"`
+	}
+	if recorder.Code != http.StatusOK || json.Unmarshal(recorder.Body.Bytes(), &response) != nil {
+		t.Fatalf("bulk response: %d %s", recorder.Code, recorder.Body.String())
+	}
+	if len(response.Results) != 4 || response.Counts["still_banned"] != 2 || response.Counts["lifted"] != 1 || response.Counts["inconclusive"] != 1 {
+		t.Fatalf("bulk check did not return all outcomes: %+v", response)
+	}
+	for _, result := range response.Results {
+		if calls[result.UID] != 1 || result.Model != "glm-5.2" {
+			t.Errorf("account was not requested exactly once: result=%+v calls=%v", result, calls)
+		}
+	}
+}
+
+func TestRunRestrictionProbesContinuesAfter11140AndFailures(t *testing.T) {
 	accounts := []pool.Status{{UID: "u1"}, {UID: "u2"}, {UID: "u3"}}
+	verdicts := []string{"still_banned", "inconclusive", "lifted"}
 	var calls []string
 	results := runRestrictionProbes(context.Background(), accounts, func(account pool.Status) restrictionProbeResult {
+		verdict := verdicts[len(calls)]
 		calls = append(calls, account.UID)
+		return restrictionProbeResult{UID: account.UID, Verdict: verdict, Restricted: verdict == "still_banned"}
+	})
+	if len(calls) != len(accounts) || len(results) != len(accounts) {
+		t.Fatalf("probe stopped before checking all accounts: calls=%v results=%v", calls, results)
+	}
+	for i, account := range accounts {
+		if calls[i] != account.UID || results[i].UID != account.UID || results[i].Verdict != verdicts[i] {
+			t.Fatalf("account %d: call=%s result=%+v", i, calls[i], results[i])
+		}
+	}
+}
+
+func TestRunRestrictionProbesStopsOnCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	accounts := []pool.Status{{UID: "u1"}, {UID: "u2"}}
+	results := runRestrictionProbes(ctx, accounts, func(account pool.Status) restrictionProbeResult {
+		cancel()
 		return restrictionProbeResult{UID: account.UID, Verdict: "still_banned", Restricted: true}
 	})
-	if len(calls) != 1 || calls[0] != "u1" || len(results) != 1 {
-		t.Fatalf("probe continued after 11140: calls=%v results=%v", calls, results)
+	if len(results) != 1 || results[0].UID != "u1" {
+		t.Fatalf("cancelled probe did not preserve completed results: %+v", results)
 	}
 }
 

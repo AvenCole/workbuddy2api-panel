@@ -141,9 +141,6 @@ func runRestrictionProbes(ctx context.Context, accounts []pool.Status, probe fun
 		}
 		result := probe(account)
 		results = append(results, result)
-		if result.Restricted {
-			break
-		}
 	}
 	return results
 }

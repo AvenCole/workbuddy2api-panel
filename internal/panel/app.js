@@ -1117,11 +1117,11 @@ $('btnCheckinAll').onclick = async () => {
   catch (e) { toast(e.message, 'err'); }
 };
 $('btnProbeAll').onclick = async () => {
-  if (!confirm('将按账号逐个发送实际聊天测试请求，可能消耗积分；一旦返回 11140 就停止后续账号。继续？')) return;
+  if (!confirm('将对全部账号逐个发送实际聊天测试请求，可能消耗积分；返回 11140 标记封号后继续检测其余账号。继续？')) return;
   const btn = $('btnProbeAll');
   btn.disabled = true;
   btn.textContent = '检测中…';
-  $('restrictionSummary').textContent = '正在逐号发送测试请求；遇到 11140 即停止…';
+  $('restrictionSummary').textContent = '正在逐号发送测试请求，检测全部账号…';
   try {
     const r = await api('accounts/probe_all', { method: 'POST' });
     const c = r.counts || {};
@@ -1130,7 +1130,7 @@ $('btnProbeAll').onclick = async () => {
       const labels = { still_banned: '封号（11140）', lifted: '请求成功', inconclusive: '无法确认',
         test_in_progress: '已有测试进行中', account_missing: '账号不存在' };
       output.hidden = false;
-      output.innerHTML = (c.still_banned ? '<p>发现 11140，后续账号未测试。</p>' : '') +
+      output.innerHTML = '<p>本轮检测 ' + (r.results || []).length + ' 个账号。</p>' +
         (r.results || []).map(item => '<div>' + esc((item.nickname || '未命名') + ' · ' + item.uid.slice(-8)) +
           '：' + esc(labels[item.verdict] || item.verdict) +
           (item.model ? ' · ' + esc(item.model) : '') +
@@ -1138,7 +1138,7 @@ $('btnProbeAll').onclick = async () => {
           ' · ' + Number(item.elapsed_ms || 0) + ' ms</div>').join('');
     }
     toast('请求检测完成：确认封号 ' + (c.still_banned || 0) + '，请求成功 ' + (c.lifted || 0) +
-      '，无法确认 ' + (c.inconclusive || 0) + (c.still_banned ? '；已停止后续测试' : ''), 'ok');
+      '，无法确认 ' + (c.inconclusive || 0), 'ok');
     await loadOverview(true);
   } catch (e) {
     toast('请求检测失败：' + e.message, 'err');
