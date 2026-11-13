@@ -585,7 +585,7 @@ function renderAccounts(list) {
     // 会话疑似失效（12153 连续计数已 >0、还没到禁用阈值）：上游已判死、号还留在池里。
     // 此前这种中间态完全不可见，面板照样打「可用」（issue #215 复盘）。
     else if (s.session_dead_fails > 0) { cls = 'cool'; tag = '<span class="tag warn">疑似登录失效 · 待重登</span>'; }
-    else tag = '<span class="tag ok">可用</span>' + (s.in_flight ? '' : '');
+    else tag = '<span class="tag ok" title="账号级可选号状态；不代表每个模型均有权限或额度">账号可选号</span>' + (s.in_flight ? '' : '');
     // 禁用原因分两行：类别+时长（谁来处置、多久了）/ 原始 reason（细节）。
     // 不分行的话「上游封禁 · 3 天前」和一段长 reason 挤在同一行，扫视时读不出重点。
     const dk = s.disabled ? disabledKind(s.reason) : null;
@@ -611,11 +611,13 @@ function renderAccounts(list) {
     // 成本台账 tooltip（model_costs）：每模型实测单价（≤0 = 实测免费），运维据此
     // 看「为什么总选它」——免费号垄断 / 单价排序一眼可见。
     let credTip;
-    if (unlimited) credTip = '企业版不限量（上游 limitNum=-1）';
+    if (unlimited) credTip = '企业版不限量（上游 limitNum=-1）；模型是否可用仍需按账号测试';
     else if (s.credits_total > 0) {
       credTip = (s.enterprise ? '企业版剩余额度 ' : '剩余 ')
         + s.credits + ' / ' + (s.enterprise ? '分配 ' : '总额 ') + s.credits_total + '（' + pct + '%）';
-    } else credTip = '积分（相对池内最高）';
+    } else credTip = '账面余额（相对池内最高）';
+    credTip += s.credits_updated_at ? '\n上游余额更新时间：' + new Date(s.credits_updated_at).toLocaleString('zh-CN', { hour12: false }) : '\n余额尚未从上游核实';
+    credTip += '\n总积分不等于每个模型都能调用；具体模型需按账号测试';
     const costs = (s.model_costs || []).filter(c => c.model);
     if (costs.length) {
       credTip += '\n实测单价（credits/1K）：\n' + costs.map(c =>
@@ -642,7 +644,7 @@ function renderAccounts(list) {
       '<td class="mark" aria-hidden="true"><i></i></td>' +
       '<td class="who"><div class="nm"><span class="nm-name" title="' + esc(rawWho) + '">' + nameHtml + '</span>' + tags + '</div><div class="id" title="uid: ' + esc(s.uid) + '">' + esc(short) + '</div>' + accountProxyHTML(s.uid) + '</td>' +
       '<td>' + tag + note + rateLimits + '</td>' +
-      '<td class="cred" title="' + esc(credTip) + '"><div class="n">' + cred + '</div><div class="bar"><i style="width:' + pct + '%"></i></div></td>' +
+      '<td class="cred" title="' + esc(credTip) + '"><div class="n">' + cred + '</div><div class="note">' + (s.credits_updated_at ? ago(s.credits_updated_at) + '更新' : '未核实') + '</div><div class="bar"><i style="width:' + pct + '%"></i></div></td>' +
       '<td class="num">' + (s.success_count || 0) + ' <span style="color:var(--ink-3)">/</span> <span style="color:var(--bad)">' + (s.err_total || 0) + '</span></td>' +
       '<td class="num">' + (s.in_flight || 0) + '</td>' +
       '<td class="num usage-cell" title="' + esc(usageTitle) + '"><span class="usage-line" aria-label="' + esc(usageTitle) + '">' +
@@ -662,6 +664,7 @@ function renderAccounts(list) {
         (personal ?
           '<button class="xs ghost" data-a="checkin" data-u="' + esc(s.uid) + '"' + (s.checkin_done ? ' title="今日已签到：重复签发不了积分，点击只是重查状态并刷新余额"' : '') + '>' + (s.checkin_done ? '已签' : '签到') + '</button>' : ''),
         '<button class="xs ghost" data-a="balance" data-u="' + esc(s.uid) + '"' + (s.enterprise ? ' title="刷新企业版已分配额度（上游 get-enterprise-user-usage）"' : '') + '>' + (s.enterprise ? '额度' : '余额') + '</button>',
+        '<button class="xs ghost" data-a="model_test" data-u="' + esc(s.uid) + '" title="指定这个账号测试一个文本模型；可能消耗少量积分">测试</button>',
         (personal ?
           '<button class="xs ghost" data-a="tasks" data-u="' + esc(s.uid) + '">任务</button>' : ''),
         (frozen ? '<button class="xs ghost" data-a="probe_ban" data-u="' + esc(s.uid) + '" title="只读探测上游是否已解封：不 revive、不参与选号、不改任何状态">探活</button>'
@@ -953,6 +956,7 @@ $('accBody').addEventListener('click', async ev => {
   const u = b.dataset.u, a = b.dataset.a;
   // 行内「备注」只开本机编辑器，不打后端接口：提前返回，跳过下面的 disable 与 confirm。
   if (a === 'remark') { openRemarks(u); return; }
+  if (a === 'model_test') { openAccountModelTest(u); return; }
   if (a === 'remove' && !confirm('移除账号将删除池状态与 auths/ 下的凭证文件，且不可恢复。确认移除？')) return;
   if (a === 'disable' && !confirm('禁用后该账号不再参与选号（保号任务默认也跳过），需手动解冻才能恢复。若只是想临时让位、仍要保号，请改用「暂停选号」。确认禁用？')) return;
   b.disabled = true;
@@ -1004,6 +1008,87 @@ $('accBody').addEventListener('click', async ev => {
     loadOverview(true);
   }
 });
+
+let modelTestUID = '';
+function closeAccountModelTest() {
+  $('modelTestVeil').classList.remove('on');
+  modelTestUID = '';
+}
+async function openAccountModelTest(uid) {
+  modelTestUID = uid;
+  const account = (lastAccountsList || []).find(x => x.uid === uid);
+  $('modelTestAccount').textContent = (account && account.nickname ? account.nickname + ' · ' : '') +
+    uid + ' · ' + (account && account.realm === 'global' ? '国际版' : '国内版');
+  $('modelTestResult').hidden = true;
+  $('modelTestSelect').disabled = true;
+  $('modelTestSelect').innerHTML = '<option value="">正在读取该账号模型目录…</option>';
+  $('btnModelTestRun').disabled = true;
+  $('modelTestVeil').classList.add('on');
+  try {
+    const r = await api('accounts/' + encodeURIComponent(uid) + '/models');
+    const chat = (r.models || []).filter(m => !m.kind);
+    $('modelTestSelect').innerHTML = chat.length
+      ? chat.map(m => '<option value="' + esc((r.realm || 'cn') + ':' + m.id) + '">' + esc(m.name || m.id) + ' · ' + esc((r.realm || 'cn') + ':' + m.id) + '</option>').join('')
+      : '<option value="">该账号没有可用文本模型</option>';
+    $('modelTestSelect').disabled = !chat.length;
+    $('btnModelTestRun').disabled = !chat.length;
+  } catch (e) {
+    $('modelTestSelect').innerHTML = '<option value="">模型目录读取失败</option>';
+    showModelTestResult('bad', '无法读取该账号的模型目录', e.message);
+  }
+}
+function showModelTestResult(tone, title, detail) {
+  const el = $('modelTestResult');
+  el.className = 'model-test-result ' + tone;
+  el.replaceChildren();
+  const strong = document.createElement('strong');
+  strong.textContent = title;
+  el.append(strong);
+  if (detail) {
+    const sub = document.createElement('div');
+    sub.className = 'hint';
+    sub.style.marginTop = '4px';
+    sub.textContent = detail;
+    el.append(sub);
+  }
+  el.hidden = false;
+}
+$('btnModelTestClose').onclick = closeAccountModelTest;
+$('modelTestVeil').addEventListener('click', e => { if (e.target === $('modelTestVeil')) closeAccountModelTest(); });
+$('btnModelTestRun').onclick = async () => {
+  if (!modelTestUID) return;
+  const uid = modelTestUID;
+  const model = $('modelTestSelect').value;
+  if (!model) return;
+  const btn = $('btnModelTestRun');
+  btn.disabled = true;
+  btn.textContent = '测试中…';
+  showModelTestResult('warn', '请求已发出', '等待该账号的上游响应…');
+  try {
+    const r = await api('accounts/' + encodeURIComponent(uid) + '/model_test', {
+      method: 'POST', body: JSON.stringify({ model }),
+    });
+    const labels = {
+      success: '测试成功', model_not_listed: '此账号目录不包含该模型',
+      not_chat_model: '这是图像或视频模型，不能用文本测试', catalog_error: '该账号模型目录查询失败',
+      soft_rate: '账号或模型当前被限流', hard_credit: '上游判定余额不足',
+      model_blocked: '账号无此模型或无权限', session_dead: '账号登录态失效',
+      transport_error: '连接上游失败', empty_response: '上游没有返回文本',
+      upstream_stream_error: '上游返回流内错误', stream_incomplete: '响应未正常结束',
+      response_too_large: '响应超过测试读取上限', test_in_progress: '该账号已有测试正在运行',
+    };
+    const detail = [r.http_status ? 'HTTP ' + r.http_status : '',
+      r.elapsed_ms ? r.elapsed_ms + ' ms' : '',
+      r.balance_refreshed ? '余额已刷新' : '余额刷新失败'].filter(Boolean).join(' · ');
+    showModelTestResult(r.ok ? 'ok' : 'warn', labels[r.verdict] || ('测试失败：' + (r.verdict || '未知')), detail);
+    loadOverview(true);
+  } catch (e) {
+    showModelTestResult('bad', '测试请求失败', e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '重新测试';
+  }
+};
 
 $('btnCheckinAll').onclick = async () => {
   try { await api('checkin_all', { method: 'POST' }); toast('全部签到已开始，结果见日志', 'ok'); }

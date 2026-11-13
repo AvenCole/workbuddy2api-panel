@@ -14,30 +14,30 @@
    冷石墨基调（仪表盘语言，非营销页）：底色分层 + 单一靛蓝强调（仅交互），
    语义色只给状态。等宽数字承载所有观测值，tabular-nums 对齐。 */
 :root {
-  --bg: #0c0e14; --surface: #14171f; --surface-2: #1a1e28; --raise: #202531;
-  --line: #262c3a; --line-soft: #1e232e;
-  --ink: #e8ebf2; --ink-2: #a8b0c2; --ink-3: #6b7488;
+  --bg: #101715; --surface: #171f1c; --surface-2: #1d2925; --raise: #24312c;
+  --line: #34433d; --line-soft: #293630;
+  --ink: #e9f0ed; --ink-2: #b3c2bb; --ink-3: #84968d;
   --bh-1: #f0e070; --bh-2: #a7fa70; --bh-3: #70fa93; --bh-4: #70e1fa;
   --bh-5: #9a8cf5; --bh-6: #ee70fa; --bh-7: #fa7097;
-  --accent: #5b7cfa; --accent-ink: #ffffff; --accent-soft: rgba(91,124,250,.13);
-  --ok: #3ddc97; --ok-soft: rgba(61,220,151,.12);
-  --warn: #f5b544; --warn-soft: rgba(245,181,68,.12);
-  --bad: #f0655f; --bad-soft: rgba(240,101,95,.12);
-  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.5);
+  --accent: #53c3a5; --accent-ink: #08221a; --accent-soft: rgba(83,195,165,.15);
+  --ok: #51ce8d; --ok-soft: rgba(81,206,141,.13);
+  --warn: #f0ad54; --warn-soft: rgba(240,173,84,.14);
+  --bad: #fa786e; --bad-soft: rgba(250,120,110,.13);
+  --shadow: 0 1px 2px rgba(0,0,0,.18), 0 8px 18px -16px rgba(0,0,0,.4);
   --mono: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace;
   --sans: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
 }
 [data-theme="light"] {
-  --bg: #f4f5f8; --surface: #ffffff; --surface-2: #f8f9fb; --raise: #ffffff;
-  --line: #e2e5ec; --line-soft: #eceef3;
-  --ink: #14171f; --ink-2: #545c6e; --ink-3: #8b93a5;
+  --bg: #f2f5f3; --surface: #ffffff; --surface-2: #f7faf8; --raise: #ffffff;
+  --line: #dce5e0; --line-soft: #e8eeea;
+  --ink: #18231e; --ink-2: #52645a; --ink-3: #77877e;
   --bh-1: #7d7900; --bh-2: #368700; --bh-3: #008a23; --bh-4: #00819e;
   --bh-5: #1600bf; --bh-6: #af00bf; --bh-7: #bf0036;
-  --accent: #3d5fe0; --accent-ink: #ffffff; --accent-soft: rgba(61,95,224,.09);
-  --ok: #0f9d63; --ok-soft: rgba(15,157,99,.1);
-  --warn: #b47611; --warn-soft: rgba(180,118,17,.11);
-  --bad: #cf3b34; --bad-soft: rgba(207,59,52,.09);
-  --shadow: 0 1px 2px rgba(16,20,32,.06), 0 8px 24px -14px rgba(16,20,32,.14);
+  --accent: #087f70; --accent-ink: #ffffff; --accent-soft: rgba(8,127,112,.09);
+  --ok: #16804c; --ok-soft: rgba(22,128,76,.09);
+  --warn: #a86a13; --warn-soft: rgba(168,106,19,.1);
+  --bad: #c14941; --bad-soft: rgba(193,73,65,.09);
+  --shadow: 0 1px 2px rgba(20,40,30,.04), 0 8px 24px -18px rgba(20,40,30,.18);
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 [hidden] { display: none !important; }
@@ -403,10 +403,10 @@ td.acts { display: table-cell; vertical-align: middle; text-align: right; }
    缺哪个留空槽。否则「解冻 / 暂停选号 / 恢复选号」互斥会改变按钮个数，整列左右错位。
    分列放在内层 div：td 保持 table-cell，vertical-align:middle 才继续生效
    （直接给 td 设 display:grid 会退出表格布局，按钮变顶对齐）。 */
-.acts-inner { display: grid; grid-template-columns: repeat(3, 54px) 68px repeat(3, 54px); gap: 5px; justify-content: end; align-items: center; }
+.acts-inner { display: grid; grid-template-columns: repeat(4, 54px) 68px repeat(3, 54px); gap: 5px; justify-content: end; align-items: center; }
 /* 「探活」只在整表有冻结账号时才渲染；没有就整列不占位 —— 否则 29 行每行都在
    「任务」和「暂停选号」之间空出一条 64px 的缝（用户反馈「中间留白难受」）。 */
-.acts-inner.with-probe { grid-template-columns: repeat(4, 54px) 68px repeat(3, 54px); }
+.acts-inner.with-probe { grid-template-columns: repeat(5, 54px) 68px repeat(3, 54px); }
 /* 统一盒模型：primary 与 ghost 的边框/行高不同会让「解冻」行比「暂停选号」行高 2~3px，
    行线因此参差。固定高度 + border-box 后每行等高、按钮底边对齐。 */
 .acts-inner button { width: 100%; height: 26px; box-sizing: border-box; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
@@ -472,6 +472,11 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 .qrbox svg { border-radius: 6px; }
 .state { font-size: 13px; color: var(--ink-2); display: flex; align-items: center; gap: 8px; }
 .state.ok { color: var(--ok); } .state.err { color: var(--bad); }
+.model-test-meta { display: flex; flex-wrap: wrap; gap: 7px 16px; color: var(--ink-2); font-size: 12.5px; }
+.model-test-result { border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; background: var(--surface-2); }
+.model-test-result.ok { border-color: color-mix(in srgb, var(--ok) 35%, var(--line)); background: var(--ok-soft); }
+.model-test-result.warn { border-color: color-mix(in srgb, var(--warn) 35%, var(--line)); background: var(--warn-soft); }
+.model-test-result.bad { border-color: color-mix(in srgb, var(--bad) 35%, var(--line)); background: var(--bad-soft); }
 /* 卡片体内的状态行（任务中心的「新增国区账号后自动执行…」）：.state 自身没有内边距，
    直接当 .box 的子元素会贴着卡片左边框，与 header 的 17px 缩进错位。 */
 .box > .state { padding: 12px 17px; }
@@ -882,6 +887,48 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 .ev-ctx-msg pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, monospace; font-size: 12px; line-height: 1.55; color: var(--ink); }
 .ev-ctx-empty { padding: 10px 12px; font-size: 12px; color: var(--ink-3); }
 
+/* Operations workspace refresh: clearer hierarchy, flatter sections, quieter controls. */
+*, *::before, *::after { letter-spacing: 0 !important; }
+.shell { grid-template-columns: 224px minmax(0, 1fr); }
+.nav { background: var(--surface); border-right-color: var(--line); }
+.brand { padding: 22px 18px 18px; }
+.brand .name { font-size: 16px; }
+.nav a { min-height: 38px; border-radius: 5px; }
+.nav a.on { box-shadow: inset 3px 0 0 var(--accent); background: var(--accent-soft); }
+.topbar { min-height: 60px; padding: 12px 28px; box-shadow: 0 1px 0 var(--line-soft); }
+.topbar h2 { font-size: 18px; }
+.view { padding: 22px 28px 64px; }
+.box { border-radius: 6px; box-shadow: none; margin-bottom: 16px; }
+.box > header { min-height: 50px; padding: 11px 16px; }
+.stats { border-radius: 6px; box-shadow: none; margin-bottom: 16px; }
+.stat { padding: 12px 15px; }
+.stat .v, .stats .st .v { font-size: 23px; }
+.acc th { background: var(--surface-2); color: var(--ink-2); font-weight: 600; }
+.acc td { padding-top: 10px; padding-bottom: 10px; }
+.acc tbody tr:hover { background: color-mix(in srgb, var(--accent) 4%, var(--surface)); }
+.acc .mark i { width: 3px; }
+.tag { border-radius: 4px; padding: 2px 7px; font-weight: 600; }
+.acts-inner button { border-radius: 4px; }
+.cred .note { margin-top: 2px; font-size: 10.5px; }
+.bar { margin-top: 4px; }
+button { border-radius: 5px; }
+button.xs, select.xs { border-radius: 4px; }
+input, select { border-radius: 5px; }
+.veil { backdrop-filter: blur(4px); }
+.dlg { border-radius: 7px; }
+.tst { border-radius: 5px; }
+#view-accounts { display: flex; flex-direction: column; }
+#view-accounts > div { order: 5; }
+#view-accounts > .stats { order: 1; }
+#view-accounts > #account-pool { order: 2; }
+#view-accounts > #account-expiry { order: 3; }
+#view-accounts > #account-activity { order: 4; }
+@media (max-width: 760px) {
+  .shell { grid-template-columns: 1fr; }
+  .topbar { min-height: 54px; padding: 9px 12px; }
+  .view { padding: 14px 12px 56px; }
+}
+
 </style>
 </head>
 <body>
@@ -970,7 +1017,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
       <!-- 到期提醒：数据取 /overview 的 credits_expiry_buckets（签到与余额后台刷新
            按自然日聚合后写入 state.json），打开页面零上游请求。同日多个包合并为一行，
            后续批次在日期下方列出；完整逐包明细在「积分构成」页。 -->
-      <div class="box">
+      <div class="box" id="account-expiry">
         <header>
           <h3>积分到期提醒 <span class="hint">按自然日聚合 · 日均需耗 = 该日到期积分 ÷ 距到期天数 · 上游按失效时刻先后自动优先扣减（FEFO）</span></h3>
           <span class="grow"></span>
@@ -1003,7 +1050,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
         </details>
       </div>
 
-      <div class="box">
+      <div class="box" id="account-pool">
         <header>
           <h3>账号池</h3>
           <span class="vtabs" id="accRealmTabs">
@@ -1041,7 +1088,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 
       <!-- 模型锁池：账号池回答「哪些号不能用」，这张表回答「哪些模型不能用、还要锁多久」。
            数据来自 /panel/api/overview 的 model_locks（与 /status 同源，无锁时为 null）。 -->
-      <div class="box">
+      <div class="box" id="account-activity">
         <header>
           <h3>模型锁池 <span class="hint">哪些模型不能用、还要锁多久</span></h3>
           <span class="grow"></span>
@@ -1943,6 +1990,29 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
         </div>
       </div>
     </section>
+  </div>
+</div>
+
+<!-- 指定账号模型测试 -->
+<div class="veil" id="modelTestVeil">
+  <div class="dlg" style="width:520px">
+    <header>
+      <h3>测试账号模型</h3>
+      <div class="hint" id="modelTestAccount"></div>
+    </header>
+    <div class="body">
+      <label class="fld"><span class="lb">文本模型</span><select id="modelTestSelect" disabled><option value="">正在读取该账号模型目录…</option></select></label>
+      <div class="model-test-result warn" style="margin:12px 0">
+        <strong>会向上游发送一条短测试请求，可能消耗积分。</strong>
+        <div class="hint" style="margin-top:4px">输出上限设为 8 token；上游计费还可能包含输入和系统提示。结果只代表此次账号与模型测试，不保证后续请求可用。</div>
+      </div>
+      <div class="model-test-result" id="modelTestResult" hidden aria-live="polite"></div>
+    </div>
+    <footer>
+      <span class="grow"></span>
+      <button id="btnModelTestClose">关闭</button>
+      <button id="btnModelTestRun" class="primary" disabled>发送测试</button>
+    </footer>
   </div>
 </div>
 

@@ -199,6 +199,7 @@ func (p *Pool) ReenableIfCredits(uid string, remain, total int64) {
 			e.credits = remain
 			e.creditsTotal = total
 		}
+		e.creditsUpdatedAt = time.Now()
 		e.creditsRemainder = 0 // 权威余额整写：亚积分余量作废
 		// ReenableIfCredits 只有聚合余额上下文；到期明细必须由 SetCreditsSnapshot
 		// 重新写入，不能沿用旧窗口/旧批次的缓存。
@@ -890,6 +891,10 @@ func (p *Pool) statusOf(uid string, e *entry) Status {
 	// Reason 只在冷却/禁用时透出（issue #171-1）：软冷却按墙钟恢复、到期不会清理字段
 	// （Cooldown/CooldownSoftRate 写、NoteSuccess 不碰），无条件透出会让面板把「可用」
 	// 和一周前的「429 rate limit」并排显示，分不清是历史残留还是当前限流。
+	if !e.creditsUpdatedAt.IsZero() {
+		updated := e.creditsUpdatedAt
+		st.CreditsUpdatedAt = &updated
+	}
 	if st.Cooling || st.Disabled {
 		st.Reason = e.reason
 	}

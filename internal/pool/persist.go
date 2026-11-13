@@ -161,6 +161,7 @@ func (p *Pool) applyAccountsLocked(accounts map[string]stateAccount) {
 		e := &entry{
 			a:                        &auth.Auth{UID: uid}, // placeholder，Add 时会换成完整凭证
 			credits:                  s.Credits,
+			creditsUpdatedAt:         s.CreditsUpdatedAt,
 			creditsRemainder:         s.CreditsRemainder,
 			creditsTotal:             s.CreditsTotal,
 			creditsExpiring:          s.CreditsExpiring,
@@ -339,6 +340,7 @@ func (p *Pool) stateOverviewLocked() stateFile {
 	for uid, e := range p.byUID {
 		s := stateAccount{
 			Credits:                  e.credits,
+			CreditsUpdatedAt:         e.creditsUpdatedAt,
 			CreditsRemainder:         e.creditsRemainder,
 			CreditsTotal:             e.creditsTotal,
 			Disabled:                 e.disabled,

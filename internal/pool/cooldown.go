@@ -18,6 +18,7 @@ func (p *Pool) SetCredits(uid string, credits, total int64) {
 	defer p.mu.Unlock()
 	if e, ok := p.byUID[uid]; ok {
 		e.credits = credits
+		e.creditsUpdatedAt = time.Now()
 		e.creditsRemainder = 0 // 权威余额整写：亚积分余量作废（同 SetCreditsDetailed）
 		e.creditsTotal = total
 		p.dirty.Store(true)
@@ -131,6 +132,7 @@ func (p *Pool) SetCreditsSnapshot(uid string, s CreditsSnapshot) {
 		earliestRemaining = 0
 	}
 	e.credits = credits
+	e.creditsUpdatedAt = now
 	e.creditsRemainder = 0 // 权威余额整写：亚积分余量作废
 	e.creditsTotal = s.Total
 	e.creditsExpiring = expiring

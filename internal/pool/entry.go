@@ -77,10 +77,11 @@ type ExpiryBucket struct {
 
 // Status 单个账号对外暴露的状态（脱敏）。
 type Status struct {
-	UID          string `json:"uid"`
-	Nickname     string `json:"nickname,omitempty"`
-	Credits      int64  `json:"credits"`
-	CreditsTotal int64  `json:"credits_total,omitempty"` // 积分总额度（各套餐聚合）；0 = 未知（旧 state/查询失败）
+	UID              string     `json:"uid"`
+	Nickname         string     `json:"nickname,omitempty"`
+	Credits          int64      `json:"credits"`
+	CreditsTotal     int64      `json:"credits_total,omitempty"`      // 积分总额度（各套餐聚合）；0 = 未知（旧 state/查询失败）
+	CreditsUpdatedAt *time.Time `json:"credits_updated_at,omitempty"` // 最近一次上游余额读取时间；本地扣费不刷新
 	// ReserveBlocked 是否因「保留积分」停牌（余额已知且 <= 阈值）：账号仍在池中、
 	// 照常跑定时任务，只是不接单。阈值 0 / 余额未知 → false。
 	ReserveBlocked bool `json:"reserve_blocked,omitempty"`
@@ -239,7 +240,8 @@ type entry struct {
 	// 小于 1 的消费差在这里保号——credits 恒为「最接近真实余额的整数」，故余量
 	// ∈ [-0.5, 0.5)。没有它时 10 次 0.1 级扣费会被逐次四舍五入吞掉（余额虚高）。
 	creditsRemainder float64
-	creditsTotal     int64 // 积分总额度（UserResource 聚合；0 = 未知）
+	creditsTotal     int64     // 积分总额度（UserResource 聚合；0 = 未知）
+	creditsUpdatedAt time.Time // 最近一次权威余额读取时刻
 	// creditsExpiring 配置窗口内即将过期的可用积分子集，是 credits 的一部分。
 	// creditsEarliestExpiry / creditsEarliestRemaining 是全部未来到期批次中的最早一批；
 	// 两者均由签到/余额刷新更新，供 earliest-expiry 路由和状态观测使用。
@@ -550,6 +552,7 @@ func (e *entry) fallbackKind(now time.Time) string {
 // stateAccount 单个账号的持久化状态（JSON tag 全小写下划线，向后兼容：缺字段零值）。
 type stateAccount struct {
 	Credits          int64     `json:"credits"`
+	CreditsUpdatedAt time.Time `json:"credits_updated_at,omitempty"`
 	CreditsRemainder float64   `json:"credits_remainder,omitempty"`
 	CreditsTotal     int64     `json:"credits_total,omitempty"`
 	Disabled         bool      `json:"disabled"`

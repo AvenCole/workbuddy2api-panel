@@ -125,8 +125,10 @@ type Panel struct {
 	// （单任务 / 全量）同时只允许一条在跑。重复点击直接返回 409"仍在执行"，
 	// 而不是并发跑两遍浪费上游请求（动作虽幂等，expert 系每遍含 8 次真实对话）。
 	// 不同账号之间不互斥（并行照旧）。TryLock 语义，锁条目常驻（账号数有界）。
-	taskMu    sync.Mutex
-	taskLocks map[string]*sync.Mutex
+	taskMu          sync.Mutex
+	taskLocks       map[string]*sync.Mutex
+	modelProbeMu    sync.Mutex
+	modelProbeLocks map[string]*sync.Mutex
 
 	// softRateMu/softRateUntil 上游软限流（429）的账号级冷却截止：撞过一次就记下来，
 	// 同一轮里后续任务动作直接快失败，不每个动作都再睡一遍——一轮全量任务有几十个
@@ -231,11 +233,12 @@ func New(cfg Config) *Panel {
 		cfg.RedisMode = "noop"
 	}
 	p := &Panel{
-		cfg:     cfg,
-		mux:     http.NewServeMux(),
-		started: time.Now(),
-		logs:    NewRing(500),
-		logins:  map[string]loginSession{},
+		cfg:             cfg,
+		mux:             http.NewServeMux(),
+		started:         time.Now(),
+		logs:            NewRing(500),
+		logins:          map[string]loginSession{},
+		modelProbeLocks: map[string]*sync.Mutex{},
 		// 热重载（issue #199）：默认 2 次连续缺席才删；间隔由 main 按 config 注入。
 		reloadDeleteConfirm: 2,
 		reloadMissing:       map[string]int{},
@@ -268,6 +271,9 @@ func (p *Panel) routes() {
 	// (账号 × 模型) 手动开关：运维显式禁用某账号的某模型（永久语义，仅手动解）。
 	// 与上游触发的临时冷却（6004/11102）正交，且手动优先。
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/model_toggle", p.modelToggle)
+	// 手动测试指定账号 × 模型，固定账号直连上游，不经过池选号。
+	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/model_test", p.accountModelTest)
+	p.mux.HandleFunc("GET /panel/api/accounts/{uid}/models", p.accountModels)
 	// 封禁账号探活：只读探测上游是否已解封，不 revive、不参与选号。
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/probe_ban", p.accountProbeBan)
 	p.mux.HandleFunc("POST /panel/api/login/start", p.loginStart)
