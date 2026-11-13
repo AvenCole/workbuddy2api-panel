@@ -3,6 +3,7 @@ package panel
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -206,9 +207,9 @@ func (p *Panel) quarantineRestrictedAccount(uid, quarantineDir string) error {
 			return err
 		}
 		dst := filepath.Join(quarantineDir, filepath.Base(src))
-		if err := os.Rename(src, dst); err != nil {
+		if err := moveCredential(src, dst); err != nil {
 			for i := len(moved) - 1; i >= 0; i-- {
-				_ = os.Rename(moved[i][1], moved[i][0])
+				_ = moveCredential(moved[i][1], moved[i][0])
 			}
 			return err
 		}
@@ -217,16 +218,50 @@ func (p *Panel) quarantineRestrictedAccount(uid, quarantineDir string) error {
 	if p.cfg.ProxyPool != nil {
 		if err := p.cfg.ProxyPool.Unbind(uid); err != nil {
 			for i := len(moved) - 1; i >= 0; i-- {
-				_ = os.Rename(moved[i][1], moved[i][0])
+				_ = moveCredential(moved[i][1], moved[i][0])
 			}
 			return err
 		}
 	}
 	if p.cfg.Pool.Remove(uid) == nil {
 		for i := len(moved) - 1; i >= 0; i-- {
-			_ = os.Rename(moved[i][1], moved[i][0])
+			_ = moveCredential(moved[i][1], moved[i][0])
 		}
 		return errors.New("account disappeared during removal")
+	}
+	return nil
+}
+
+func moveCredential(src, dst string) error {
+	if err := os.Rename(src, dst); err == nil {
+		return nil
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		_ = os.Remove(dst)
+		return err
+	}
+	if err := out.Sync(); err != nil {
+		_ = out.Close()
+		_ = os.Remove(dst)
+		return err
+	}
+	if err := out.Close(); err != nil {
+		_ = os.Remove(dst)
+		return err
+	}
+	if err := os.Remove(src); err != nil {
+		_ = os.Remove(dst)
+		return err
 	}
 	return nil
 }

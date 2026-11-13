@@ -72,3 +72,24 @@ func TestDeleteRestrictedAccountsStoresQuarantineUnderConfiguredPersistentDir(t 
 		t.Fatalf("quarantine directory is not on persistent data volume: %s", got)
 	}
 }
+
+func TestMoveCredentialCopiesAndRemovesSource(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(root, "auth.json")
+	dst := filepath.Join(root, "quarantine", "auth.json")
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(src, []byte("credential fixture"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := moveCredential(src, dst); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(src); !os.IsNotExist(err) {
+		t.Fatalf("source credential still exists: %v", err)
+	}
+	if raw, err := os.ReadFile(dst); err != nil || string(raw) != "credential fixture" {
+		t.Fatalf("quarantine content = %q, err=%v", raw, err)
+	}
+}
